@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Phira 管理面板</title>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">P</span>
+      <span class="brand-text">
+        <strong id="admin-site-name">Phira 管理面板</strong>
+        <span class="brand-sub">管理员</span>
+      </span>
+    </div>
+    <nav class="nav" id="admin-nav" hidden>
+      <button class="nav-btn is-active" type="button" data-tab="overview">概览</button>
+      <button class="nav-btn" type="button" data-tab="rooms">房间</button>
+      <button class="nav-btn" type="button" data-tab="bindings">绑定</button>
+      <button class="nav-btn" type="button" data-tab="announce">公告</button>
+      <button class="nav-btn" type="button" data-tab="logs">日志</button>
+    </nav>
+    <div class="topbar-actions">
+      <span class="api-chip is-missing" id="admin-api-chip">API 未配置</span>
+      <button class="btn btn-ghost btn-sm" id="admin-settings" type="button">设置</button>
+      <button class="btn btn-ghost btn-sm" id="admin-logout" type="button" hidden>退出登录</button>
+    </div>
+  </header>
+
+  <main class="page">
+    <!-- 登录 -->
+    <section class="auth-wrap" id="admin-login-view">
+      <form class="card auth-card" id="admin-login-form" novalidate>
+        <div class="card-head">
+          <div>
+            <h2>管理员登录</h2>
+            <p class="muted">使用服务器 API 地址与访问令牌登录管理面板。</p>
+          </div>
+        </div>
+        <div class="card-body">
+          <label class="field" for="admin-api-base">
+            <span>API 地址</span>
+            <input class="input" id="admin-api-base" type="url" placeholder="https://phira.example.com" autocomplete="url">
+          </label>
+          <label class="field" for="admin-token">
+            <span>访问令牌</span>
+            <input class="input" id="admin-token" type="password" autocomplete="off" placeholder="服务端未设置令牌时可留空">
+          </label>
+          <p class="hint">令牌对应后端 server_config.yml 中的 api.access_token。留空表示服务端未启用令牌校验。令牌仅保存在当前浏览器。</p>
+          <p class="form-error" id="admin-login-error" hidden></p>
+          <button class="btn btn-primary btn-block" id="admin-login-submit" type="submit">登录</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- 已登录 -->
+    <div id="admin-app-view" hidden>
+      <div class="toolbar">
+        <div class="toolbar-info">
+          <span class="sync-status" id="admin-sync">尚未同步</span>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="admin-refresh" type="button">刷新</button>
+      </div>
+
+      <!-- 概览 -->
+      <section class="tab-panel" id="tab-overview" hidden>
+        <div class="stat-grid">
+          <div class="stat">
+            <span class="stat-label">运行时长</span>
+            <strong class="stat-value" id="stat-uptime">—</strong>
+          </div>
+          <div class="stat">
+            <span class="stat-label">在线用户</span>
+            <strong class="stat-value" id="stat-users">—</strong>
+          </div>
+          <div class="stat">
+            <span class="stat-label">连接会话</span>
+            <strong class="stat-value" id="stat-sessions">—</strong>
+          </div>
+          <div class="stat">
+            <span class="stat-label">房间数</span>
+            <strong class="stat-value" id="stat-rooms">—</strong>
+          </div>
+          <div class="stat">
+            <span class="stat-label">内存占用</span>
+            <strong class="stat-value" id="stat-memory">—</strong>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>客户端建房</h2>
+              <p class="muted">控制玩家能否在 Phira 客户端自行创建房间，重启后恢复配置文件的值。</p>
+            </div>
+            <span class="tag tag-muted" id="creation-tag">未知</span>
+          </div>
+          <div class="card-body">
+            <div class="control-row">
+              <button class="btn btn-primary" id="btn-room-creation" type="button">允许客户端建房</button>
+              <span class="hint" id="creation-hint">正在读取服务器状态。</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>在线用户</h2>
+              <p class="muted">包含掉线等待重连的玩家。</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="table-wrap" id="users-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>玩家 ID</th>
+                    <th>昵称</th>
+                    <th>房间</th>
+                    <th>身份</th>
+                    <th>状态</th>
+                  </tr>
+                </thead>
+                <tbody id="users-body"></tbody>
+              </table>
+            </div>
+            <div class="empty" id="users-empty" hidden>当前没有在线用户。</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 房间 -->
+      <section class="tab-panel" id="tab-rooms" hidden>
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>房间管理</h2>
+              <p class="muted">包含隐藏房间（ID 以 _ 开头）。列表不提供选谱与开始游戏，需房间内成员操作。</p>
+            </div>
+            <button class="btn btn-ghost btn-sm" id="rooms-refresh" type="button">刷新</button>
+          </div>
+          <div class="card-body">
+            <div class="inline-form">
+              <div class="field">
+                <label for="create-room-id">新建房间 ID</label>
+                <input class="input" id="create-room-id" type="text" maxlength="20" placeholder="字母、数字、-、_，1~20 位" autocomplete="off">
+                <p class="field-error" id="create-room-error" hidden></p>
+              </div>
+              <button class="btn btn-primary" id="btn-create-room" type="button">创建房间</button>
+            </div>
+            <div class="inline-form">
+              <div class="field">
+                <label for="broadcast-content">管理消息</label>
+                <input class="input" id="broadcast-content" type="text" placeholder="发送给全部房间的内容" autocomplete="off">
+                <p class="field-error" id="broadcast-error" hidden></p>
+              </div>
+              <button class="btn" id="btn-broadcast" type="button">向全部房间发送</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>在线房间</h2>
+              <p class="muted">点击“详情”查看成员并执行管理操作。</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="table-wrap" id="admin-rooms-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>房间</th>
+                    <th>人数</th>
+                    <th>谱面</th>
+                    <th>阶段</th>
+                    <th>状态</th>
+                    <th>房主</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="admin-rooms-body"></tbody>
+              </table>
+            </div>
+            <div class="empty" id="admin-rooms-empty" hidden>当前没有房间。</div>
+          </div>
+        </div>
+
+        <div class="card" id="admin-room-detail" hidden>
+          <div class="card-head">
+            <div>
+              <h2>房间详情</h2>
+              <p class="muted" id="admin-room-detail-sub">—</p>
+            </div>
+            <button class="btn btn-ghost btn-sm" id="btn-admin-close-detail" type="button">关闭</button>
+          </div>
+          <div class="card-body" id="admin-room-detail-body"></div>
+        </div>
+      </section>
+
+      <!-- 绑定 -->
+      <section class="tab-panel" id="tab-bindings" hidden>
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>生成绑定链接</h2>
+              <p class="muted">为尚未绑定 Phira 账号的 QQ 用户生成一次性登录链接。</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="inline-form">
+              <div class="field">
+                <label for="bind-qq">QQ 号</label>
+                <input class="input" id="bind-qq" type="text" inputmode="numeric" autocomplete="off" placeholder="例如 123456789">
+                <p class="field-error" id="bind-qq-error" hidden></p>
+              </div>
+              <button class="btn btn-primary" id="btn-create-link" type="button">生成链接</button>
+            </div>
+            <div class="link-box" id="link-result" hidden>
+              <div class="link-main">
+                <a id="link-anchor" href="#" target="_blank" rel="noopener noreferrer">—</a>
+                <p class="hint" id="link-expires"></p>
+              </div>
+              <button class="btn btn-ghost btn-sm" id="btn-copy-link" type="button">复制链接</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>QQ 绑定列表</h2>
+              <p class="muted">解绑后该 QQ 需要重新登录绑定。</p>
+            </div>
+            <button class="btn btn-ghost btn-sm" id="bindings-refresh" type="button">刷新</button>
+          </div>
+          <div class="card-body">
+            <div class="table-wrap" id="bindings-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>平台</th>
+                    <th>QQ 号</th>
+                    <th>Phira ID</th>
+                    <th>昵称</th>
+                    <th>绑定时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="bindings-body"></tbody>
+              </table>
+            </div>
+            <div class="empty" id="bindings-empty" hidden>暂无绑定记录。</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 公告 -->
+      <section class="tab-panel" id="tab-announce" hidden>
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>发布公告</h2>
+              <p class="muted">公告会立即发送给所有在线玩家，无法撤回。</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="field">
+              <label for="announce-content">公告内容</label>
+              <textarea class="textarea" id="announce-content" placeholder="例如：服务器将在 10 分钟后进行维护"></textarea>
+              <p class="field-error" id="announce-error" hidden></p>
+            </div>
+            <div class="control-row">
+              <button class="btn btn-primary" id="btn-announce" type="button">发布公告</button>
+              <span class="hint">发送后消息会带有“【公告】”前缀。</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 日志 -->
+      <section class="tab-panel" id="tab-logs" hidden>
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>服务器日志</h2>
+              <p class="muted" id="log-file">尚未加载</p>
+            </div>
+            <div class="card-actions">
+              <select class="select select-sm" id="log-lines" aria-label="日志行数">
+                <option value="100">100 行</option>
+                <option value="200" selected>200 行</option>
+                <option value="500">500 行</option>
+                <option value="1000">1000 行</option>
+              </select>
+              <button class="btn btn-ghost btn-sm" id="logs-refresh" type="button">刷新</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <pre class="log-view" id="log-content">尚未加载。</pre>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- API 地址设置 -->
+  <div class="modal-backdrop" id="admin-settings-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="admin-settings-title">
+      <div class="modal-head">
+        <h2 id="admin-settings-title">API 地址设置</h2>
+      </div>
+      <div class="modal-body">
+        <label class="field" for="admin-api-base-input">
+          <span>服务器 API 地址</span>
+          <input class="input" id="admin-api-base-input" type="url" placeholder="https://phira.example.com" autocomplete="url">
+        </label>
+        <p class="field-error" id="admin-api-base-error" hidden></p>
+        <p class="hint">填写后端 HTTP API 的根地址，不要带末尾斜杠。地址保存在当前浏览器中。</p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" id="btn-admin-settings-cancel" type="button">取消</button>
+        <button class="btn btn-primary" id="btn-admin-settings-save" type="button">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
+
+  <script src="config.js" defer></script>
+  <script src="assets/admin.js" defer></script>
+</body>
+</html>

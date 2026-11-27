@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Phira 玩家面板</title>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">P</span>
+      <span class="brand-text">
+        <strong id="site-name">Phira 管理面板</strong>
+        <span class="brand-sub">玩家面板</span>
+      </span>
+    </div>
+    <div class="topbar-actions">
+      <span class="api-chip is-missing" id="api-chip">API 未配置</span>
+      <button class="btn btn-ghost btn-sm" id="btn-settings" type="button">设置</button>
+      <span class="user-chip" id="user-chip" hidden>
+        <span class="avatar" id="user-avatar" aria-hidden="true">?</span>
+        <span class="user-name" id="user-name"></span>
+      </span>
+      <button class="btn btn-ghost btn-sm" id="btn-logout" type="button" hidden>退出</button>
+    </div>
+  </header>
+
+  <main class="page">
+    <!-- 未登录：Phira 账号登录 -->
+    <section class="auth-wrap" id="login-view">
+      <form class="card auth-card" id="login-form" novalidate>
+        <div class="card-head">
+          <div>
+            <h2>登录玩家面板</h2>
+            <p class="muted">使用 Phira 官方邮箱与密码登录，用于查看并操作你所在的房间。</p>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="notice" id="api-warning" hidden>
+            <p>尚未配置 API 地址，请先填写服务器地址后再登录。</p>
+            <button class="btn btn-primary btn-sm" id="btn-open-settings" type="button">填写 API 地址</button>
+          </div>
+          <label class="field" for="login-email">
+            <span>Phira 邮箱</span>
+            <input class="input" id="login-email" name="email" type="email" autocomplete="username" placeholder="you@example.com" required>
+          </label>
+          <label class="field" for="login-password">
+            <span>密码</span>
+            <input class="input" id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Phira 账号密码" required>
+          </label>
+          <p class="form-error" id="login-error" hidden></p>
+          <button class="btn btn-primary btn-block" id="login-submit" type="submit">登录</button>
+          <p class="hint">密码仅发送到你所配置的服务器，由服务器转发给 Phira 官方验证，本页面不会保存密码。会话有效期约 7 天。</p>
+        </div>
+      </form>
+    </section>
+
+    <!-- 已登录 -->
+    <div id="app-view" hidden>
+      <div class="toolbar">
+        <div class="toolbar-info">
+          <span class="sync-status" id="sync-status">尚未同步</span>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="btn-refresh" type="button">刷新</button>
+      </div>
+
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2>我的房间</h2>
+            <p class="muted">房间操作需要 Phira 账号在线，并且已进入该房间。</p>
+          </div>
+        </div>
+        <div class="card-body" id="my-room"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2>在线房间</h2>
+            <p class="muted">隐藏房间不会显示在列表中，点击“详情”可查看成员。</p>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap" id="rooms-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>房间</th>
+                  <th>人数</th>
+                  <th>谱面</th>
+                  <th>阶段</th>
+                  <th>状态</th>
+                  <th>房主</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="rooms-body"></tbody>
+            </table>
+          </div>
+          <div class="empty" id="rooms-empty" hidden>当前没有在线房间。</div>
+        </div>
+      </section>
+
+      <section class="card" id="room-detail-card" hidden>
+        <div class="card-head">
+          <div>
+            <h2>房间详情</h2>
+            <p class="muted" id="room-detail-sub">只读视图</p>
+          </div>
+          <button class="btn btn-ghost btn-sm" id="btn-close-detail" type="button">关闭</button>
+        </div>
+        <div class="card-body" id="room-detail"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2>账号</h2>
+            <p class="muted">QQ 绑定用于在群聊中通过指令控制房间。</p>
+          </div>
+        </div>
+        <div class="card-body" id="account"></div>
+      </section>
+    </div>
+  </main>
+
+  <!-- API 地址设置 -->
+  <div class="modal-backdrop" id="settings-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="modal-head">
+        <h2 id="settings-title">API 地址设置</h2>
+      </div>
+      <div class="modal-body">
+        <label class="field" for="api-base-input">
+          <span>服务器 API 地址</span>
+          <input class="input" id="api-base-input" type="url" placeholder="https://phira.example.com" autocomplete="url">
+        </label>
+        <p class="field-error" id="api-base-error" hidden></p>
+        <p class="hint">填写后端 HTTP API 的根地址，不要带末尾斜杠。例如 https://phira.lisongyun.top。地址保存在当前浏览器中。</p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" id="btn-settings-cancel" type="button">取消</button>
+        <button class="btn btn-primary" id="btn-settings-save" type="button">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
+
+  <script src="config.js" defer></script>
+  <script src="assets/app.js" defer></script>
+</body>
+</html>

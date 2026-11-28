@@ -3,7 +3,6 @@
   'use strict';
 
   var CONFIG = window.PHIRA_CONFIG || {};
-  var STORAGE_API = 'phira_api_base';
   var STORAGE_TOKEN = 'phira_web_token';
   var REFRESH_MS = 8000;
 
@@ -36,7 +35,8 @@
   }
 
   function getApiBase() {
-    return normalizeBase(storageGet(STORAGE_API)) || normalizeBase(CONFIG.apiBase);
+    // 玩家面板固定使用部署配置，普通用户不能修改 API 地址
+    return normalizeBase(CONFIG.apiBase);
   }
 
   /* ---------------- 网络请求 ---------------- */

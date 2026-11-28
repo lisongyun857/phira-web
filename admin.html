@@ -2,13 +2,20 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0d1014">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Phira 管理面板">
+  <meta name="format-detection" content="telephone=no">
   <title>Phira 管理面板</title>
-  <link rel="stylesheet" href="assets/styles.css?v=3">
+  <link rel="preconnect" href="https://phira.5wyxi.com" crossorigin>
+  <link rel="dns-prefetch" href="https://phira.5wyxi.com">
+  <link rel="stylesheet" href="assets/styles.css?v=4">
 </head>
 <body>
-  <header class="topbar">
+  <header class="topbar topbar-admin">
     <div class="brand">
       <span class="brand-mark" aria-hidden="true">P</span>
       <span class="brand-text">
@@ -365,7 +372,7 @@
               <table class="table">
                 <thead>
                   <tr>
-                    <th class="col-check"><input class="checkbox" id="bindings-select-all" type="checkbox" aria-label="全选当前页"></th>
+                    <th class="col-check"><label class="check-tap"><input class="checkbox" id="bindings-select-all" type="checkbox" aria-label="全选当前页"></label></th>
                     <th>平台</th>
                     <th>QQ 号</th>
                     <th>Phira ID</th>
@@ -561,8 +568,9 @@
 
   <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
 
-  <script src="config.js?v=3" defer></script>
-  <script src="assets/chart-picker.js?v=3" defer></script>
-  <script src="assets/admin.js?v=3" defer></script>
+  <script src="config.js?v=4" defer></script>
+  <script src="assets/mobile.js?v=4" defer></script>
+  <script src="assets/chart-picker.js?v=4" defer></script>
+  <script src="assets/admin.js?v=4" defer></script>
 </body>
 </html>

@@ -1660,7 +1660,7 @@
       var row = el(
         'tr',
         { class: checkbox.checked ? 'is-selected' : null },
-        el('td', { class: 'col-check' }, checkbox),
+        el('td', { class: 'col-check' }, el('label', { class: 'check-tap' }, checkbox)),
         el('td', { text: platformLabel(binding.platform) }),
         el('td', { class: 'mono', text: String(binding.userId) }),
         el('td', { class: 'mono', text: String(binding.phiraId) }),

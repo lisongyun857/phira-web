@@ -17,8 +17,6 @@
       </span>
     </div>
     <div class="topbar-actions">
-      <span class="api-chip is-missing" id="api-chip">API 未配置</span>
-      <button class="btn btn-ghost btn-sm" id="btn-settings" type="button">设置</button>
       <span class="user-chip" id="user-chip" hidden>
         <span class="avatar" id="user-avatar" aria-hidden="true">?</span>
         <span class="user-name" id="user-name"></span>
@@ -38,10 +36,6 @@
           </div>
         </div>
         <div class="card-body">
-          <div class="notice" id="api-warning" hidden>
-            <p>尚未配置 API 地址，请先填写服务器地址后再登录。</p>
-            <button class="btn btn-primary btn-sm" id="btn-open-settings" type="button">填写 API 地址</button>
-          </div>
           <label class="field" for="login-email">
             <span>Phira 邮箱</span>
             <input class="input" id="login-email" name="email" type="email" autocomplete="username" placeholder="you@example.com" required>
@@ -126,27 +120,6 @@
       </section>
     </div>
   </main>
-
-  <!-- API 地址设置 -->
-  <div class="modal-backdrop" id="settings-modal" hidden>
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-      <div class="modal-head">
-        <h2 id="settings-title">API 地址设置</h2>
-      </div>
-      <div class="modal-body">
-        <label class="field" for="api-base-input">
-          <span>服务器 API 地址</span>
-          <input class="input" id="api-base-input" type="url" placeholder="https://phira.example.com" autocomplete="url">
-        </label>
-        <p class="field-error" id="api-base-error" hidden></p>
-        <p class="hint">填写后端 HTTP API 的根地址，不要带末尾斜杠。例如 https://phira.lisongyun.top。地址保存在当前浏览器中。</p>
-      </div>
-      <div class="modal-foot">
-        <button class="btn btn-ghost" id="btn-settings-cancel" type="button">取消</button>
-        <button class="btn btn-primary" id="btn-settings-save" type="button">保存</button>
-      </div>
-    </div>
-  </div>
 
   <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
 

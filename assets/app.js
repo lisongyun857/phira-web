@@ -54,7 +54,7 @@
     var opts = options || {};
     var base = getApiBase();
     if (!base) {
-      throw new ApiError('尚未配置 API 地址，请先在“设置”中填写服务器地址', 0);
+      throw new ApiError('服务器地址未配置，请联系管理员', 0);
     }
     var headers = { Accept: 'application/json' };
     if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
@@ -71,7 +71,7 @@
         mode: 'cors',
       });
     } catch (e) {
-      throw new ApiError('无法连接服务器，请检查 API 地址和网络连接', 0);
+      throw new ApiError('无法连接服务器，请检查网络或联系管理员', 0);
     }
 
     var payload = null;
@@ -392,25 +392,11 @@
     if (logoutButton) logoutButton.hidden = false;
   }
 
-  function showWarning(visible) {
-    var warning = $('#api-warning');
-    if (warning) warning.hidden = !visible;
-  }
-
   function setLoginError(message) {
     var node = $('#login-error');
     if (!node) return;
     node.textContent = message || '';
     node.hidden = !message;
-  }
-
-  function updateApiChip() {
-    var chip = $('#api-chip');
-    if (!chip) return;
-    var base = getApiBase();
-    chip.textContent = base || 'API 未配置';
-    chip.title = base || '尚未配置 API 地址';
-    chip.classList.toggle('is-missing', !base);
   }
 
   function updateUserChip() {
@@ -1128,9 +1114,8 @@
     setLoginError('');
 
     if (!getApiBase()) {
-      setLoginError('请先配置 API 地址');
-      toast('请先配置 API 地址', 'error');
-      openSettings();
+      setLoginError('服务器地址未配置，请联系管理员');
+      toast('服务器地址未配置，请联系管理员', 'error');
       return;
     }
     if (!email) {
@@ -1166,7 +1151,6 @@
       if (passwordInput) passwordInput.value = '';
       setLoginError('');
       showApp();
-      showWarning(false);
       renderAll();
       toast('登录成功', 'success');
       await refreshAll(true);
@@ -1198,64 +1182,6 @@
     toast('已退出登录', 'info');
   }
 
-  /* ---------------- 设置弹层 ---------------- */
-
-  function openSettings() {
-    var modal = $('#settings-modal');
-    var input = $('#api-base-input');
-    var errorNode = $('#api-base-error');
-    if (!modal || !input) return;
-    input.value = getApiBase();
-    clearFieldError(input, errorNode);
-    modal.hidden = false;
-    setTimeout(function () {
-      input.focus();
-    }, 0);
-  }
-
-  function closeSettings() {
-    var modal = $('#settings-modal');
-    if (modal) modal.hidden = true;
-  }
-
-  function saveSettings() {
-    var input = $('#api-base-input');
-    var errorNode = $('#api-base-error');
-    if (!input) return;
-
-    var value = normalizeBase(input.value);
-    if (!value) {
-      setFieldError(input, errorNode, '请填写 API 地址');
-      input.focus();
-      return;
-    }
-
-    var parsed = null;
-    try {
-      parsed = new URL(value);
-    } catch (e) {
-      parsed = null;
-    }
-    if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) {
-      setFieldError(input, errorNode, '地址需要以 http:// 或 https:// 开头');
-      input.focus();
-      return;
-    }
-
-    clearFieldError(input, errorNode);
-    storageSet(STORAGE_API, value);
-    closeSettings();
-    updateApiChip();
-    showWarning(false);
-    toast('已保存 API 地址', 'success');
-
-    if (state.token) {
-      refreshAll(true);
-    } else {
-      showLogin();
-    }
-  }
-
   /* ---------------- 初始化 ---------------- */
 
   function startTimer() {
@@ -1270,31 +1196,6 @@
     var loginForm = $('#login-form');
     if (loginForm) loginForm.addEventListener('submit', handleLogin);
 
-    var settingsButton = $('#btn-settings');
-    if (settingsButton) settingsButton.addEventListener('click', openSettings);
-
-    var openSettingsButton = $('#btn-open-settings');
-    if (openSettingsButton) openSettingsButton.addEventListener('click', openSettings);
-
-    var cancelSettings = $('#btn-settings-cancel');
-    if (cancelSettings) cancelSettings.addEventListener('click', closeSettings);
-
-    var saveSettingsButton = $('#btn-settings-save');
-    if (saveSettingsButton) saveSettingsButton.addEventListener('click', saveSettings);
-
-    var settingsModal = $('#settings-modal');
-    if (settingsModal) {
-      settingsModal.addEventListener('click', function (event) {
-        if (event.target === settingsModal) closeSettings();
-      });
-    }
-
-    document.addEventListener('keydown', function (event) {
-      if (event.key !== 'Escape') return;
-      var modal = $('#settings-modal');
-      if (modal && !modal.hidden) closeSettings();
-    });
-
     var logoutButton = $('#btn-logout');
     if (logoutButton) logoutButton.addEventListener('click', handleLogout);
 
@@ -1302,7 +1203,7 @@
     if (refreshButton) {
       refreshButton.addEventListener('click', function () {
         if (!getApiBase()) {
-          openSettings();
+          toast('服务器地址未配置，请联系管理员', 'error');
           return;
         }
         if (!state.token) {
@@ -1324,19 +1225,6 @@
       });
     }
 
-    var baseInput = $('#api-base-input');
-    if (baseInput) {
-      baseInput.addEventListener('input', function () {
-        clearFieldError(baseInput, $('#api-base-error'));
-      });
-      baseInput.addEventListener('keydown', function (event) {
-        if (event.key === 'Enter') {
-          event.preventDefault();
-          saveSettings();
-        }
-      });
-    }
-
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState === 'visible' && state.token) refreshAll(false);
     });
@@ -1349,19 +1237,16 @@
     document.title = siteName + ' · 玩家面板';
 
     bindEvents();
-    updateApiChip();
 
     if (!getApiBase()) {
       showLogin();
-      showWarning(true);
-      openSettings();
+      setLoginError('服务器地址未配置，请联系管理员');
     } else if (state.token) {
       showApp();
       renderAll();
       refreshAll(true);
     } else {
       showLogin();
-      showWarning(false);
     }
 
     startTimer();

@@ -699,6 +699,26 @@
             if (!validateChartInput(chartInput, chartError, true)) return;
             runRoomAction('select-chart', { chartId: Number(chartInput.value.trim()) }, { successText: '已提交选谱' });
           }
+        ),
+        actionButton(
+          '搜索选谱',
+          'btn-ghost',
+          !selectPhase,
+          '仅在未开始阶段可以选择谱面',
+          function () {
+            if (!window.ChartPicker) return;
+            ChartPicker.open({
+              title: '选择谱面 · 房间 ' + room.id,
+              selectedId: hasChart ? room.chart.id : null,
+              onSelect: function (chart) {
+                runRoomAction(
+                  'select-chart',
+                  { chartId: chart.id },
+                  { successText: '已选择《' + chart.name + '》' }
+                );
+              },
+            });
+          }
         )
       )
     );

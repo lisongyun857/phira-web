@@ -1096,6 +1096,54 @@
       )
     );
 
+    if (room.state === 'SelectChart') {
+      var adminChartInput = el('input', {
+        class: 'input',
+        id: 'admin-chart-id-input',
+        type: 'number',
+        min: '1',
+        step: '1',
+        inputmode: 'numeric',
+        placeholder: '谱面 ID',
+      });
+      group.appendChild(
+        el(
+          'div',
+          { class: 'control-row' },
+          el(
+            'div',
+            { class: 'field' },
+            el('label', { for: 'admin-chart-id-input', text: '谱面 ID' }),
+            adminChartInput
+          ),
+          actionButton('选择谱面', 'btn-primary', false, '', function () {
+            var id = Number(adminChartInput.value.trim());
+            if (!Number.isInteger(id) || id <= 0) {
+              toast('请输入正整数谱面 ID', 'error');
+              adminChartInput.focus();
+              return;
+            }
+            adminRoomAction(room.id, 'select-chart', { chartId: id }, { successText: '已选择谱面' });
+          }),
+          actionButton('搜索选谱', 'btn-ghost', false, '', function () {
+            if (!window.ChartPicker) return;
+            ChartPicker.open({
+              title: '选择谱面 · 房间 ' + room.id,
+              selectedId: room.chart ? room.chart.id : null,
+              onSelect: function (chart) {
+                adminRoomAction(
+                  room.id,
+                  'select-chart',
+                  { chartId: chart.id },
+                  { successText: '已选择《' + chart.name + '》' }
+                );
+              },
+            });
+          })
+        )
+      );
+    }
+
     var targetInput = el('input', {
       class: 'input',
       id: 'admin-target-input',

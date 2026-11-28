@@ -530,6 +530,48 @@ a:hover {
   align-self: flex-start;
 }
 
+.notice-danger {
+  border-color: rgba(239, 107, 107, 0.35);
+  background: var(--danger-soft);
+  color: #ffb4b4;
+}
+
+.auth-advanced {
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-soft);
+}
+
+.auth-advanced > summary {
+  padding: 10px 0;
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.auth-advanced[open] > summary {
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.auth-advanced .field {
+  margin-bottom: 12px;
+}
+
+.auth-advanced .hint {
+  padding-bottom: 12px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px 14px;
+  align-items: start;
+}
+
 .inline-form {
   display: flex;
   align-items: flex-end;
@@ -666,6 +708,40 @@ a:hover {
 
 .table td .tag-row {
   gap: 4px;
+}
+
+.table th.col-check,
+.table td.col-check {
+  width: 40px;
+  text-align: center;
+}
+
+.checkbox {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pagination-info {
+  color: var(--text-dim);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pre-line {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* ---------- 房间展示 ---------- */

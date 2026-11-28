@@ -6,6 +6,9 @@
   var STORAGE_API = 'phira_api_base';
   var STORAGE_TOKEN = 'phira_admin_token';
   var REFRESH_MS = 8000;
+  var BINDINGS_PAGE_SIZE = 20;
+  var LOG_LINE_LIMIT = 1000;
+  var STREAM_RETRY_MS = 3000;
 
   /* ---------------- 存储与地址 ---------------- */
 
@@ -54,7 +57,7 @@
     var opts = options || {};
     var base = getApiBase();
     if (!base) {
-      throw new ApiError('尚未配置 API 地址，请先在“设置”中填写服务器地址', 0);
+      throw new ApiError('尚未配置 API 地址，请先在“API 地址”中填写服务器地址', 0);
     }
     var headers = { Accept: 'application/json' };
     if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
@@ -89,6 +92,17 @@
       throw new ApiError(message, response.status);
     }
     return payload.data;
+  }
+
+  /** 管理请求：默认附带当前管理员令牌 */
+  function adminRequest(path, options) {
+    var opts = {};
+    var source = options || {};
+    Object.keys(source).forEach(function (key) {
+      opts[key] = source[key];
+    });
+    if (opts.token === undefined) opts.token = state.token || undefined;
+    return request(path, opts);
   }
 
   /* ---------------- DOM / 文案工具 ---------------- */
@@ -178,8 +192,13 @@
     return pad2(date.getHours()) + ':' + pad2(date.getMinutes()) + ':' + pad2(date.getSeconds());
   }
 
-  function stateLabel(state) {
-    switch (state) {
+  function formatFileDate(date) {
+    var value = date || new Date();
+    return String(value.getFullYear()) + pad2(value.getMonth() + 1) + pad2(value.getDate());
+  }
+
+  function stateLabel(stateName) {
+    switch (stateName) {
       case 'SelectChart':
         return '未开始';
       case 'WaitForReady':
@@ -191,9 +210,9 @@
     }
   }
 
-  function stateTagClass(state) {
-    if (state === 'WaitForReady') return 'tag-warn';
-    if (state === 'Playing') return 'tag-info';
+  function stateTagClass(stateName) {
+    if (stateName === 'WaitForReady') return 'tag-warn';
+    if (stateName === 'Playing') return 'tag-info';
     return 'tag-muted';
   }
 
@@ -201,6 +220,10 @@
     if (!platform) return '—';
     if (String(platform).toLowerCase() === 'qq') return 'QQ';
     return String(platform);
+  }
+
+  function banTypeLabel(type) {
+    return type === 'user' ? 'Phira ID' : 'IP';
   }
 
   function tag(text, className) {
@@ -216,6 +239,14 @@
       el('span', { class: 'meta-label', text: label }),
       valueNode
     );
+  }
+
+  function listValue(list) {
+    var items = Array.isArray(list) ? list : [];
+    return el('span', {
+      class: 'meta-value pre-line',
+      text: items.length ? items.join('\n') : '—',
+    });
   }
 
   function loadingState(text) {
@@ -373,12 +404,25 @@
     status: null,
     users: [],
     rooms: [],
+    bans: [],
     bindings: [],
+    bindingRows: [],
+    selectedBindings: {},
+    bindingPage: 1,
+    bindingPageSize: BINDINGS_PAGE_SIZE,
+    bindingTotal: 0,
+    bindingSearch: '',
+    playerSearch: '',
     selectedRoomId: '',
     selectedRoom: null,
     activeTab: 'overview',
     logLines: 200,
     lastLink: '',
+    config: null,
+    stream: null,
+    streamTimer: null,
+    streamManualStop: false,
+    streamLineCount: 0,
     busy: {},
   };
 
@@ -409,9 +453,21 @@
     state.status = null;
     state.users = [];
     state.rooms = [];
+    state.bans = [];
     state.bindings = [];
+    state.bindingRows = [];
+    state.selectedBindings = {};
+    state.bindingPage = 1;
+    state.bindingTotal = 0;
+    state.bindingSearch = '';
+    state.playerSearch = '';
     state.selectedRoomId = '';
     state.selectedRoom = null;
+    state.config = null;
+    state.lastLink = '';
+    state.streamLineCount = 0;
+    var streamPre = $('#log-stream');
+    if (streamPre) streamPre.textContent = '尚未开始实时日志。';
   }
 
   function showLogin() {
@@ -420,13 +476,19 @@
     var nav = $('#admin-nav');
     var logoutButton = $('#admin-logout');
     var baseInput = $('#admin-api-base');
-    var tokenInput = $('#admin-token');
+    var passwordInput = $('#admin-password');
+    var details = $('#admin-api-details');
+    var playerSearch = $('#players-search');
+    var bindingsSearch = $('#bindings-search');
     if (loginView) loginView.hidden = false;
     if (appView) appView.hidden = true;
     if (nav) nav.hidden = true;
     if (logoutButton) logoutButton.hidden = true;
     if (baseInput) baseInput.value = getApiBase();
-    if (tokenInput) tokenInput.value = state.token || '';
+    if (passwordInput) passwordInput.value = '';
+    if (details) details.open = !getApiBase();
+    if (playerSearch) playerSearch.value = '';
+    if (bindingsSearch) bindingsSearch.value = '';
     updateApiChip();
   }
 
@@ -443,41 +505,33 @@
   }
 
   function expireSession(message) {
+    var text = message || '管理员登录已过期';
+    var hadSession = Boolean(state.token) || state.authed;
+    stopLogStream(true);
     state.authed = false;
     state.token = '';
     storageSet(STORAGE_TOKEN, '');
     resetData();
     showLogin();
-    setLoginError(message);
+    setLoginError(text);
     markSync('尚未同步', false);
-    toast(message, 'error');
+    if (hadSession) toast(text, 'error');
   }
 
   function handleError(error, silent) {
     if (error.status === 401) {
-      expireSession('访问令牌无效或已失效，请重新登录');
+      expireSession('管理员登录已过期');
       return;
     }
     markSync('请求失败：' + error.message, true);
     if (!silent) toast(error.message, 'error');
   }
 
-  /* ---------------- 登录 ---------------- */
+  /* ---------------- 登录 / 校验 ---------------- */
 
-  async function attemptLogin(silent) {
-    var baseInput = $('#admin-api-base');
-    var tokenInput = $('#admin-token');
-    var submitButton = $('#admin-login-submit');
-    if (!baseInput || !tokenInput) return;
-
-    var base = normalizeBase(baseInput.value);
-    if (!base) {
-      setLoginError('请填写 API 地址');
-      if (!silent) toast('请填写 API 地址', 'error');
-      baseInput.focus();
-      return;
-    }
-
+  function parseApiBase(raw) {
+    var base = normalizeBase(raw);
+    if (!base) return { error: '请填写 API 地址' };
     var parsed = null;
     try {
       parsed = new URL(base);
@@ -485,40 +539,100 @@
       parsed = null;
     }
     if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) {
-      setLoginError('API 地址需要以 http:// 或 https:// 开头');
-      if (!silent) toast('API 地址需要以 http:// 或 https:// 开头', 'error');
+      return { error: 'API 地址需要以 http:// 或 https:// 开头' };
+    }
+    return { base: base };
+  }
+
+  async function attemptLogin(event) {
+    if (event) event.preventDefault();
+    var baseInput = $('#admin-api-base');
+    var passwordInput = $('#admin-password');
+    var submitButton = $('#admin-login-submit');
+    if (!baseInput || !passwordInput) return;
+
+    var parsed = parseApiBase(baseInput.value);
+    if (parsed.error) {
+      setLoginError(parsed.error);
       baseInput.focus();
       return;
     }
+    var password = passwordInput.value;
+    if (!password) {
+      setLoginError('请输入管理员密码');
+      passwordInput.focus();
+      return;
+    }
+    if (password.length < 6) {
+      setLoginError('密码至少 6 位');
+      passwordInput.focus();
+      return;
+    }
 
-    storageSet(STORAGE_API, base);
+    storageSet(STORAGE_API, parsed.base);
     updateApiChip();
 
-    var token = tokenInput.value.trim();
     setBusy(submitButton, true);
     setLoginError('');
     try {
-      var status = await request('/api/status', { token: token || undefined });
-      state.token = token;
+      var data = await request('/api/admin/login', {
+        method: 'POST',
+        body: { password: password },
+      });
+      state.token = data && data.token ? String(data.token) : '';
+      if (!state.token) throw new ApiError('服务器未返回管理员令牌', 0);
       state.authed = true;
-      state.status = status;
-      storageSet(STORAGE_TOKEN, token);
+      storageSet(STORAGE_TOKEN, state.token);
+      passwordInput.value = '';
       setLoginError('');
       showApp();
-      switchTab(state.activeTab || 'overview');
-      if (!silent) toast('登录成功', 'success');
+      switchTab('overview');
+      toast('登录成功', 'success');
     } catch (error) {
-      setLoginError(
-        error.status === 401 ? '访问令牌无效，请检查后重试' : error.message
-      );
-      if (!silent) toast(error.message, 'error');
+      if (error.status === 401) {
+        setLoginError('密码错误');
+      } else if (error.status === 429 || error.status === 503) {
+        setLoginError(error.message);
+      } else {
+        setLoginError(error.message);
+      }
+      if (error.status !== 401) toast(error.message, 'error');
       if (!state.authed) showLogin();
     } finally {
       setBusy(submitButton, false);
     }
   }
 
+  async function verifySession() {
+    if (!state.token) {
+      showLogin();
+      return;
+    }
+    try {
+      var data = await request('/api/admin/config', { token: state.token });
+      state.config = data.config || null;
+      state.authed = true;
+      showApp();
+      switchTab('overview');
+    } catch (error) {
+      if (error.status === 401) {
+        expireSession('管理员登录已过期');
+      } else {
+        state.authed = false;
+        showLogin();
+        setLoginError('无法验证登录状态：' + error.message);
+      }
+    }
+  }
+
   async function handleLogout() {
+    var token = state.token;
+    stopLogStream(true);
+    try {
+      if (token) await request('/api/admin/logout', { method: 'POST', token: token });
+    } catch (error) {
+      /* 退出失败也要本地清除 */
+    }
     state.token = '';
     state.authed = false;
     storageSet(STORAGE_TOKEN, '');
@@ -531,9 +645,10 @@
 
   /* ---------------- 标签页 ---------------- */
 
+  var TABS = ['overview', 'rooms', 'players', 'bindings', 'logs', 'announce', 'settings'];
+
   function switchTab(tab) {
-    var valid = ['overview', 'rooms', 'bindings', 'announce', 'logs'];
-    if (valid.indexOf(tab) === -1) tab = 'overview';
+    if (TABS.indexOf(tab) === -1) tab = 'overview';
     state.activeTab = tab;
 
     var buttons = document.querySelectorAll('#admin-nav .nav-btn');
@@ -541,7 +656,7 @@
       button.classList.toggle('is-active', button.getAttribute('data-tab') === tab);
     });
 
-    valid.forEach(function (name) {
+    TABS.forEach(function (name) {
       var panel = $('#tab-' + name);
       if (panel) panel.hidden = name !== tab;
     });
@@ -551,10 +666,15 @@
       loadUsers(false);
     } else if (tab === 'rooms') {
       loadRooms(false);
+    } else if (tab === 'players') {
+      loadUsers(false);
+      loadBans(false);
     } else if (tab === 'bindings') {
       loadBindings(false);
     } else if (tab === 'logs') {
       loadLogs(false);
+    } else if (tab === 'settings') {
+      loadConfig(false);
     }
   }
 
@@ -564,7 +684,7 @@
     if (state.busy.status) return;
     state.busy.status = true;
     try {
-      state.status = await request('/api/status', { token: state.token || undefined });
+      state.status = await adminRequest('/api/status');
       renderStatus();
       markSync('已同步 ' + formatClock(Date.now()), false);
     } catch (error) {
@@ -617,9 +737,10 @@
     if (state.busy.users) return;
     state.busy.users = true;
     try {
-      var data = await request('/api/users', { token: state.token || undefined });
+      var data = await adminRequest('/api/users');
       state.users = data.users || [];
       renderUsers();
+      renderPlayers();
       markSync('已同步 ' + formatClock(Date.now()), false);
     } catch (error) {
       handleError(error, silent);
@@ -673,9 +794,8 @@
     var button = $('#btn-room-creation');
     setBusy(button, true);
     try {
-      var data = await request('/api/room-creation', {
+      var data = await adminRequest('/api/room-creation', {
         method: 'POST',
-        token: state.token || undefined,
         body: { enabled: enabled },
       });
       if (state.status) state.status.allowClientCreateRoom = Boolean(data.enabled);
@@ -694,7 +814,7 @@
     if (state.busy.rooms) return;
     state.busy.rooms = true;
     try {
-      var data = await request('/api/rooms?all=1', { token: state.token || undefined });
+      var data = await adminRequest('/api/rooms?all=1');
       state.rooms = data.rooms || [];
       if (
         state.selectedRoomId &&
@@ -794,9 +914,7 @@
     if (state.busy.detail) return;
     state.busy.detail = true;
     try {
-      var data = await request('/api/room?id=' + encodeURIComponent(roomId), {
-        token: state.token || undefined,
-      });
+      var data = await adminRequest('/api/room?id=' + encodeURIComponent(roomId));
       if (state.selectedRoomId !== roomId) return;
       state.selectedRoom = data.room;
       renderRoomDetail();
@@ -1069,9 +1187,8 @@
     if (state.busy.action) return;
     state.busy.action = true;
     try {
-      await request('/api/room/action', {
+      await adminRequest('/api/room/action', {
         method: 'POST',
-        token: state.token || undefined,
         body: Object.assign({ admin: true, roomId: roomId, action: action }, extra || {}),
       });
       toast(opts.successText || '操作成功', 'success');
@@ -1092,9 +1209,8 @@
       return;
     }
     try {
-      await request('/api/say', {
+      await adminRequest('/api/say', {
         method: 'POST',
-        token: state.token || undefined,
         body: { target: roomId, content: content },
       });
       input.value = '';
@@ -1122,9 +1238,8 @@
 
     state.busy.action = true;
     try {
-      var data = await request('/api/rooms/delete', {
+      var data = await adminRequest('/api/rooms/delete', {
         method: 'POST',
-        token: state.token || undefined,
         body: { id: room.id },
       });
       toast('房间已解散，移出 ' + (data.members || 0) + ' 名成员', 'success');
@@ -1154,9 +1269,8 @@
     var roomId = input.value.trim();
     setBusy(button, true);
     try {
-      await request('/api/rooms/create', {
+      await adminRequest('/api/rooms/create', {
         method: 'POST',
-        token: state.token || undefined,
         body: { id: roomId },
       });
       input.value = '';
@@ -1186,9 +1300,8 @@
 
     setBusy(button, true);
     try {
-      var data = await request('/api/say', {
+      var data = await adminRequest('/api/say', {
         method: 'POST',
-        token: state.token || undefined,
         body: { target: 'all', content: content },
       });
       input.value = '';
@@ -1200,15 +1313,269 @@
     }
   }
 
+  /* ---------------- 玩家与封禁 ---------------- */
+
+  function filteredUsers() {
+    var query = state.playerSearch.trim().toLowerCase();
+    var list = state.users || [];
+    if (!query) return list;
+    return list.filter(function (user) {
+      return (
+        String(user.id).toLowerCase().indexOf(query) !== -1 ||
+        String(user.name || '').toLowerCase().indexOf(query) !== -1
+      );
+    });
+  }
+
+  function renderPlayers() {
+    var tbody = $('#players-body');
+    if (!tbody) return;
+    clear(tbody);
+
+    var users = filteredUsers();
+    var emptyNode = $('#players-empty');
+    var wrapNode = $('#players-wrap');
+    if (emptyNode) {
+      emptyNode.hidden = users.length > 0;
+      emptyNode.textContent = state.playerSearch.trim()
+        ? '没有匹配的玩家。'
+        : '当前没有在线用户。';
+    }
+    if (wrapNode) wrapNode.hidden = users.length === 0;
+
+    if (!users.length) return;
+
+    users.forEach(function (user) {
+      tbody.appendChild(
+        el(
+          'tr',
+          {},
+          el('td', { class: 'mono', text: String(user.id) }),
+          el('td', { text: user.name || '—' }),
+          el('td', { class: 'mono', text: user.room || '—' }),
+          el('td', {}, tag(user.monitor ? '旁观' : '玩家', user.monitor ? 'tag-muted' : 'tag-ok')),
+          el('td', {}, tag(user.online ? '在线' : '离线', user.online ? 'tag-ok' : 'tag-danger')),
+          el(
+            'td',
+            {},
+            el(
+              'button',
+              {
+                class: 'btn btn-danger btn-sm',
+                type: 'button',
+                onClick: function () { kickUser(user); },
+              },
+              '踢下线'
+            )
+          )
+        )
+      );
+    });
+  }
+
+  async function kickUser(user) {
+    if (state.busy.kick) return;
+    var label = (user.name || '未命名') + '（' + user.id + '）';
+    var ok = await confirmAction({
+      title: '踢下线',
+      message: '确定将“' + label + '”踢下线吗？玩家连接会被断开，可能需要重新登录。',
+      confirmText: '踢下线',
+      danger: true,
+    });
+    if (!ok) return;
+
+    state.busy.kick = true;
+    try {
+      var data = await adminRequest('/api/admin/kick', {
+        method: 'POST',
+        body: { id: Number(user.id) },
+      });
+      if (data.kicked) {
+        toast('已踢下线：' + (data.name || label), 'success');
+      } else {
+        toast('该玩家当前不在线', 'info');
+      }
+      await loadUsers(true);
+    } catch (error) {
+      handleError(error, false);
+    } finally {
+      state.busy.kick = false;
+    }
+  }
+
+  async function loadBans(silent) {
+    if (state.busy.bans) return;
+    state.busy.bans = true;
+    try {
+      var data = await adminRequest('/api/admin/bans');
+      state.bans = data.bans || [];
+      renderBans();
+    } catch (error) {
+      handleError(error, silent);
+    } finally {
+      state.busy.bans = false;
+    }
+  }
+
+  function renderBans() {
+    var tbody = $('#bans-body');
+    if (!tbody) return;
+    clear(tbody);
+
+    var bans = state.bans || [];
+    var emptyNode = $('#bans-empty');
+    var wrapNode = $('#bans-wrap');
+    if (emptyNode) emptyNode.hidden = bans.length > 0;
+    if (wrapNode) wrapNode.hidden = bans.length === 0;
+
+    if (!bans.length) return;
+
+    bans.forEach(function (ban) {
+      var permanent = ban.expiresAt === null || ban.expiresAt === undefined;
+      tbody.appendChild(
+        el(
+          'tr',
+          {},
+          el('td', {}, tag(banTypeLabel(ban.type), ban.type === 'user' ? 'tag-info' : 'tag-warn')),
+          el('td', { class: 'mono', text: String(ban.value) }),
+          el('td', { text: ban.reason || '—' }),
+          el('td', { text: formatTime(ban.createdAt) }),
+          el('td', {}, permanent ? tag('永久', 'tag-danger') : formatTime(ban.expiresAt)),
+          el(
+            'td',
+            {},
+            el(
+              'button',
+              {
+                class: 'btn btn-danger btn-sm',
+                type: 'button',
+                onClick: function () { removeBan(ban); },
+              },
+              '解除'
+            )
+          )
+        )
+      );
+    });
+  }
+
+  async function createBan() {
+    var typeSelect = $('#ban-type');
+    var valueInput = $('#ban-value');
+    var minutesInput = $('#ban-minutes');
+    var reasonInput = $('#ban-reason');
+    var errorNode = $('#ban-error');
+    var button = $('#btn-ban');
+    if (!typeSelect || !valueInput || !minutesInput) return;
+
+    var type = typeSelect.value === 'user' ? 'user' : 'ip';
+    var value = valueInput.value.trim();
+    var minutesRaw = minutesInput.value.trim();
+    var reason = reasonInput ? reasonInput.value.trim() : '';
+
+    if (!value) {
+      setFieldError(valueInput, errorNode, '请输入封禁值');
+      valueInput.focus();
+      return;
+    }
+    if (type === 'user') {
+      if (!/^\d+$/.test(value) || Number(value) <= 0) {
+        setFieldError(valueInput, errorNode, 'Phira ID 必须是正整数');
+        valueInput.focus();
+        return;
+      }
+    } else if (/\s/.test(value)) {
+      setFieldError(valueInput, errorNode, 'IP 地址不能包含空格');
+      valueInput.focus();
+      return;
+    }
+    if (!/^\d+$/.test(minutesRaw)) {
+      setFieldError(minutesInput, errorNode, '封禁时长必须是非负整数（分钟）');
+      minutesInput.focus();
+      return;
+    }
+
+    clearFieldError(valueInput, errorNode);
+    clearFieldError(minutesInput, errorNode);
+    if (reasonInput) clearFieldError(reasonInput, errorNode);
+
+    setBusy(button, true);
+    try {
+      await adminRequest('/api/admin/ban', {
+        method: 'POST',
+        body: { type: type, value: value, minutes: Number(minutesRaw), reason: reason },
+      });
+      valueInput.value = '';
+      if (reasonInput) reasonInput.value = '';
+      toast('已添加封禁：' + value, 'success');
+      await loadBans(true);
+    } catch (error) {
+      handleError(error, false);
+    } finally {
+      setBusy(button, false);
+    }
+  }
+
+  async function removeBan(ban) {
+    if (state.busy.ban) return;
+    var ok = await confirmAction({
+      title: '解除封禁',
+      message: '确定解除对 ' + ban.value + ' 的' + banTypeLabel(ban.type) + '封禁吗？',
+      confirmText: '解除封禁',
+      danger: true,
+    });
+    if (!ok) return;
+
+    state.busy.ban = true;
+    try {
+      var data = await adminRequest('/api/admin/ban', {
+        method: 'DELETE',
+        body: { type: ban.type, value: ban.value },
+      });
+      toast(data.removed ? '已解除封禁' : '该封禁已不存在', data.removed ? 'success' : 'info');
+      await loadBans(true);
+    } catch (error) {
+      handleError(error, false);
+    } finally {
+      state.busy.ban = false;
+    }
+  }
+
   /* ---------------- 绑定 ---------------- */
+
+  function bindingKey(binding) {
+    return String(binding.platform) + ':' + String(binding.userId);
+  }
 
   async function loadBindings(silent) {
     if (state.busy.bindings) return;
     state.busy.bindings = true;
+    var requestedPage = state.bindingPage;
+    var path =
+      '/api/bindings?page=' +
+      encodeURIComponent(requestedPage) +
+      '&pageSize=' +
+      encodeURIComponent(BINDINGS_PAGE_SIZE);
+    if (state.bindingSearch) path += '&search=' + encodeURIComponent(state.bindingSearch);
+
     try {
-      var data = await request('/api/bindings', { token: state.token || undefined });
+      var data = await adminRequest(path);
+      var pageSize = Number(data.pageSize) || BINDINGS_PAGE_SIZE;
+      var total = Number(data.total) || 0;
+      var totalPages = Math.max(1, Math.ceil(total / pageSize));
+      if (requestedPage > totalPages) {
+        state.bindingPage = totalPages;
+        state.busy.bindings = false;
+        await loadBindings(silent);
+        return;
+      }
+      state.bindingPage = requestedPage;
+      state.bindingPageSize = pageSize;
+      state.bindingTotal = total;
       state.bindings = data.bindings || [];
+      state.selectedBindings = {};
       renderBindings();
+      renderBindingsPager();
       markSync('已同步 ' + formatClock(Date.now()), false);
     } catch (error) {
       handleError(error, silent);
@@ -1221,41 +1588,152 @@
     var tbody = $('#bindings-body');
     if (!tbody) return;
     clear(tbody);
+    state.bindingRows = [];
 
     var bindings = state.bindings || [];
     var emptyNode = $('#bindings-empty');
     var wrapNode = $('#bindings-wrap');
-    if (emptyNode) emptyNode.hidden = bindings.length > 0;
+    if (emptyNode) {
+      emptyNode.hidden = bindings.length > 0;
+      emptyNode.textContent = state.bindingSearch
+        ? '没有匹配的绑定记录。'
+        : '暂无绑定记录。';
+    }
     if (wrapNode) wrapNode.hidden = bindings.length === 0;
 
-    if (!bindings.length) return;
-
     bindings.forEach(function (binding) {
-      tbody.appendChild(
-        el(
-          'tr',
-          {},
-          el('td', { text: platformLabel(binding.platform) }),
-          el('td', { class: 'mono', text: String(binding.userId) }),
-          el('td', { class: 'mono', text: String(binding.phiraId) }),
-          el('td', { text: binding.phiraName || '—' }),
-          el('td', { text: formatTime(binding.boundAt) }),
-          el(
-            'td',
-            {},
-            el(
-              'button',
-              {
-                class: 'btn btn-danger btn-sm',
-                type: 'button',
-                onClick: function () { unbind(binding); },
-              },
-              '解绑'
-            )
-          )
-        )
+      var key = bindingKey(binding);
+      var checkbox = el('input', {
+        class: 'checkbox',
+        type: 'checkbox',
+        'aria-label': '选择 ' + platformLabel(binding.platform) + ' ' + binding.userId,
+      });
+      checkbox.checked = Boolean(state.selectedBindings[key]);
+      var row = el(
+        'tr',
+        { class: checkbox.checked ? 'is-selected' : null },
+        el('td', { class: 'col-check' }, checkbox),
+        el('td', { text: platformLabel(binding.platform) }),
+        el('td', { class: 'mono', text: String(binding.userId) }),
+        el('td', { class: 'mono', text: String(binding.phiraId) }),
+        el('td', { text: binding.phiraName || '—' }),
+        el('td', { text: formatTime(binding.boundAt) })
       );
+      checkbox.addEventListener('change', function () {
+        setBindingSelected(key, checkbox.checked, row);
+        updateBindingSelectionUI();
+      });
+      tbody.appendChild(row);
+      state.bindingRows.push({ key: key, input: checkbox, row: row });
     });
+
+    updateBindingSelectionUI();
+  }
+
+  function setBindingSelected(key, selected, row) {
+    if (selected) {
+      state.selectedBindings[key] = true;
+    } else {
+      delete state.selectedBindings[key];
+    }
+    if (row) row.classList.toggle('is-selected', Boolean(selected));
+  }
+
+  function updateBindingSelectionUI() {
+    var count = Object.keys(state.selectedBindings).length;
+    var total = state.bindingRows.length;
+    var countNode = $('#bindings-selected-count');
+    if (countNode) countNode.textContent = count ? '已选择 ' + count + ' 项' : '未选择';
+    var batchButton = $('#btn-batch-unbind');
+    if (batchButton) batchButton.disabled = count === 0;
+    var selectAll = $('#bindings-select-all');
+    if (selectAll) {
+      selectAll.disabled = total === 0;
+      selectAll.checked = total > 0 && count === total;
+      selectAll.indeterminate = count > 0 && count < total;
+    }
+  }
+
+  function renderBindingsPager() {
+    var pageSize = state.bindingPageSize || BINDINGS_PAGE_SIZE;
+    var totalPages = Math.max(1, Math.ceil(state.bindingTotal / pageSize));
+    var info = $('#bindings-page-info');
+    if (info) {
+      info.textContent =
+        '第 ' + state.bindingPage + ' / ' + totalPages + ' 页 · 共 ' + state.bindingTotal + ' 条';
+    }
+    var prev = $('#bindings-prev');
+    var next = $('#bindings-next');
+    if (prev) prev.disabled = state.bindingPage <= 1;
+    if (next) next.disabled = state.bindingPage >= totalPages;
+  }
+
+  async function batchUnbind() {
+    if (state.busy.unbind) return;
+    var keys = Object.keys(state.selectedBindings).map(function (key) {
+      var index = key.indexOf(':');
+      return { platform: key.slice(0, index), userId: key.slice(index + 1) };
+    });
+    if (!keys.length) {
+      toast('请先选择要解绑的绑定', 'error');
+      return;
+    }
+
+    var ok = await confirmAction({
+      title: '批量解绑',
+      message: '确定解除选中的 ' + keys.length + ' 个绑定吗？解绑后对应 QQ 需要重新登录绑定。',
+      confirmText: '批量解绑',
+      danger: true,
+    });
+    if (!ok) return;
+
+    var button = $('#btn-batch-unbind');
+    state.busy.unbind = true;
+    setBusy(button, true);
+    try {
+      var data = await adminRequest('/api/admin/bindings/unbind', {
+        method: 'POST',
+        body: { keys: keys },
+      });
+      toast('已解绑 ' + (data.unbound || 0) + ' 个绑定（共提交 ' + (data.total || keys.length) + ' 个）', 'success');
+      state.selectedBindings = {};
+      await loadBindings(true);
+    } catch (error) {
+      handleError(error, false);
+    } finally {
+      state.busy.unbind = false;
+      setBusy(button, false);
+      updateBindingSelectionUI();
+    }
+  }
+
+  async function exportBindings() {
+    if (state.busy.export) return;
+    var button = $('#btn-export-bindings');
+    state.busy.export = true;
+    setBusy(button, true);
+    try {
+      var data = await adminRequest('/api/bindings');
+      var bindings = (data && data.bindings) || [];
+      var text = JSON.stringify(bindings, null, 2);
+      var blob = new Blob([text], { type: 'application/json;charset=utf-8' });
+      var url = URL.createObjectURL(blob);
+      var anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'phira-bindings-' + formatFileDate(new Date()) + '.json';
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      setTimeout(function () {
+        URL.revokeObjectURL(url);
+      }, 1000);
+      toast('已导出 ' + bindings.length + ' 条绑定', 'success');
+    } catch (error) {
+      handleError(error, false);
+    } finally {
+      state.busy.export = false;
+      setBusy(button, false);
+    }
   }
 
   async function generateLink() {
@@ -1271,9 +1749,8 @@
     var qq = input.value.trim();
     setBusy(button, true);
     try {
-      var data = await request('/api/login/link', {
+      var data = await adminRequest('/api/login/link', {
         method: 'POST',
-        token: state.token || undefined,
         body: { platform: 'qq', userId: qq },
       });
       showLink(data);
@@ -1302,39 +1779,6 @@
     }
     if (expires) {
       expires.textContent = data && data.expiresAt ? '有效期至 ' + formatTime(data.expiresAt) : '';
-    }
-  }
-
-  async function unbind(binding) {
-    if (state.busy.action) return;
-    var ok = await confirmAction({
-      title: '解除绑定',
-      message:
-        '确定解除 QQ ' +
-        binding.userId +
-        ' 与 Phira 账号 ' +
-        (binding.phiraName || '') +
-        '（' +
-        binding.phiraId +
-        '）的绑定吗？解绑后该 QQ 需要重新登录绑定。',
-      confirmText: '解除绑定',
-      danger: true,
-    });
-    if (!ok) return;
-
-    state.busy.action = true;
-    try {
-      await request('/api/login/binding', {
-        method: 'DELETE',
-        token: state.token || undefined,
-        body: { platform: binding.platform, userId: binding.userId },
-      });
-      toast('已解除绑定', 'success');
-      await loadBindings(true);
-    } catch (error) {
-      handleError(error, false);
-    } finally {
-      state.busy.action = false;
     }
   }
 
@@ -1402,9 +1846,8 @@
 
     setBusy(button, true);
     try {
-      var data = await request('/api/announce', {
+      var data = await adminRequest('/api/announce', {
         method: 'POST',
-        token: state.token || undefined,
         body: { content: content },
       });
       input.value = '';
@@ -1416,7 +1859,173 @@
     }
   }
 
-  /* ---------------- 日志 ---------------- */
+  /* ---------------- 实时日志 ---------------- */
+
+  function setStreamStatus(variant, text) {
+    var node = $('#stream-status');
+    if (!node) return;
+    var className = 'tag-muted';
+    if (variant === 'connected') className = 'tag-ok';
+    else if (variant === 'connecting') className = 'tag-warn';
+    else if (variant === 'error') className = 'tag-danger';
+    node.className = 'tag ' + className;
+    node.textContent = text;
+  }
+
+  function updateStreamButton() {
+    var button = $('#btn-stream-toggle');
+    if (!button) return;
+    var active = Boolean(state.stream || state.streamTimer);
+    button.textContent = active ? '停止实时' : '开始实时';
+  }
+
+  function appendLogLine(raw) {
+    var pre = $('#log-stream');
+    if (!pre) return;
+    var line = raw;
+    try {
+      var parsed = JSON.parse(raw);
+      if (typeof parsed === 'string') line = parsed;
+    } catch (e) {
+      /* 非 JSON 时按原文显示 */
+    }
+    if (state.streamLineCount === 0) pre.textContent = '';
+    pre.appendChild(document.createTextNode(String(line) + '\n'));
+    state.streamLineCount += 1;
+    while (state.streamLineCount > LOG_LINE_LIMIT && pre.firstChild) {
+      pre.removeChild(pre.firstChild);
+      state.streamLineCount -= 1;
+    }
+    pre.scrollTop = pre.scrollHeight;
+  }
+
+  function clearStreamView() {
+    var pre = $('#log-stream');
+    state.streamLineCount = 0;
+    if (pre) pre.textContent = state.stream ? '' : '尚未开始实时日志。';
+  }
+
+  function checkStreamAuth() {
+    if (!state.authed || !state.token) return;
+    request('/api/admin/config', { token: state.token })
+      .then(function (data) {
+        if (data && data.config) state.config = data.config;
+      })
+      .catch(function (error) {
+        if (error.status === 401) expireSession('管理员登录已过期');
+      });
+  }
+
+  function startLogStream() {
+    if (!state.authed || !state.token) {
+      toast('请先登录管理员面板', 'error');
+      return;
+    }
+    if (state.stream) return;
+    if (typeof EventSource === 'undefined') {
+      setStreamStatus('error', '浏览器不支持 SSE');
+      toast('当前浏览器不支持 EventSource', 'error');
+      return;
+    }
+    var base = getApiBase();
+    if (!base) {
+      toast('尚未配置 API 地址', 'error');
+      return;
+    }
+
+    state.streamManualStop = false;
+    if (state.streamTimer) {
+      clearTimeout(state.streamTimer);
+      state.streamTimer = null;
+    }
+
+    var url = base + '/api/logs/stream?token=' + encodeURIComponent(state.token);
+    var source;
+    try {
+      source = new EventSource(url);
+    } catch (e) {
+      setStreamStatus('error', '连接失败');
+      scheduleStreamReconnect();
+      updateStreamButton();
+      return;
+    }
+
+    state.stream = source;
+    setStreamStatus('connecting', '连接中…');
+    updateStreamButton();
+
+    source.addEventListener('log', function (event) {
+      if (state.stream !== source) return;
+      appendLogLine(event.data);
+    });
+
+    source.onopen = function () {
+      if (state.stream !== source) return;
+      setStreamStatus('connected', '已连接');
+    };
+
+    source.onerror = function () {
+      if (state.stream !== source) return;
+      state.stream = null;
+      source.onopen = null;
+      source.onerror = null;
+      try {
+        source.close();
+      } catch (e) {
+        /* 忽略关闭异常 */
+      }
+      if (state.streamManualStop) {
+        setStreamStatus('stopped', '已停止');
+        updateStreamButton();
+        return;
+      }
+      setStreamStatus('error', '已断开，3 秒后重连');
+      updateStreamButton();
+      checkStreamAuth();
+      scheduleStreamReconnect();
+    };
+  }
+
+  function scheduleStreamReconnect() {
+    if (state.streamManualStop || !state.authed) return;
+    if (state.streamTimer) return;
+    state.streamTimer = setTimeout(function () {
+      state.streamTimer = null;
+      if (state.streamManualStop || !state.authed) return;
+      startLogStream();
+    }, STREAM_RETRY_MS);
+  }
+
+  function stopLogStream(quiet) {
+    state.streamManualStop = true;
+    if (state.streamTimer) {
+      clearTimeout(state.streamTimer);
+      state.streamTimer = null;
+    }
+    var source = state.stream;
+    state.stream = null;
+    if (source) {
+      source.onopen = null;
+      source.onerror = null;
+      try {
+        source.close();
+      } catch (e) {
+        /* 忽略关闭异常 */
+      }
+    }
+    if (!quiet) {
+      setStreamStatus('stopped', '已停止');
+      updateStreamButton();
+    }
+  }
+
+  function toggleLogStream() {
+    if (state.stream || state.streamTimer) {
+      stopLogStream(false);
+      return;
+    }
+    startLogStream();
+  }
 
   async function loadLogs(silent) {
     if (state.busy.logs) return;
@@ -1428,9 +2037,7 @@
     state.logLines = lines;
 
     try {
-      var data = await request('/api/logs?lines=' + encodeURIComponent(lines), {
-        token: state.token || undefined,
-      });
+      var data = await adminRequest('/api/logs?lines=' + encodeURIComponent(lines));
       renderLogs(data);
       markSync('已同步 ' + formatClock(Date.now()), false);
     } catch (error) {
@@ -1452,7 +2059,174 @@
     pre.scrollTop = pre.scrollHeight;
   }
 
-  /* ---------------- 设置弹层 ---------------- */
+  /* ---------------- 系统设置 ---------------- */
+
+  async function loadConfig(silent) {
+    if (state.busy.config) return;
+    state.busy.config = true;
+    try {
+      var data = await adminRequest('/api/admin/config');
+      state.config = data.config || null;
+      renderConfig();
+    } catch (error) {
+      handleError(error, silent);
+    } finally {
+      state.busy.config = false;
+    }
+  }
+
+  function configuredTag(configured) {
+    return tag(configured ? '已配置' : '未配置', configured ? 'tag-ok' : 'tag-muted');
+  }
+
+  function enabledTag(enabled) {
+    return tag(enabled ? '已启用' : '已停用', enabled ? 'tag-ok' : 'tag-muted');
+  }
+
+  function renderConfig() {
+    var grid = $('#config-grid');
+    if (!grid) return;
+    clear(grid);
+
+    var config = state.config;
+    if (!config) {
+      grid.appendChild(el('p', { class: 'muted', text: '尚未加载服务端配置。' }));
+      return;
+    }
+
+    grid.appendChild(metaItem('监听地址', config.host || '—'));
+    grid.appendChild(metaItem('端口', config.port === undefined ? '—' : String(config.port)));
+    grid.appendChild(metaItem('API 服务', enabledTag(Boolean(config.apiEnabled))));
+    grid.appendChild(metaItem('access_token', configuredTag(Boolean(config.accessTokenConfigured))));
+    grid.appendChild(metaItem('管理员密码', configuredTag(Boolean(config.adminPasswordConfigured))));
+    grid.appendChild(metaItem('登录服务', enabledTag(Boolean(config.loginEnabled))));
+    grid.appendChild(metaItem('QQ 机器人', enabledTag(Boolean(config.qqBotEnabled))));
+    grid.appendChild(metaItem('客户端建房', enabledTag(Boolean(config.roomCreationAllowed))));
+    grid.appendChild(metaItem('对外地址', config.publicUrl || '—'));
+    grid.appendChild(metaItem('允许来源', listValue(config.allowedOrigins)));
+    grid.appendChild(metaItem('保护接口', listValue(config.protectedPaths)));
+    grid.appendChild(metaItem('公开接口', listValue(config.publicPaths)));
+    grid.appendChild(metaItem('受信代理', listValue(config.trustedProxies)));
+
+    var originsInput = $('#config-allowed-origins');
+    if (originsInput) {
+      originsInput.value = Array.isArray(config.allowedOrigins) ? config.allowedOrigins.join('\n') : '';
+    }
+  }
+
+  async function saveAdminPassword() {
+    var passwordInput = $('#config-admin-password');
+    var confirmInput = $('#config-admin-password2');
+    var errorNode = $('#config-password-error');
+    var button = $('#btn-save-password');
+    if (!passwordInput || !confirmInput) return;
+
+    var password = passwordInput.value;
+    var confirmation = confirmInput.value;
+
+    clearFieldError(passwordInput, errorNode);
+    clearFieldError(confirmInput, errorNode);
+
+    if (!password) {
+      setFieldError(passwordInput, errorNode, '请输入新密码');
+      passwordInput.focus();
+      return;
+    }
+    if (password.length < 6 || password.length > 64) {
+      setFieldError(passwordInput, errorNode, '密码长度需为 6~64 位');
+      passwordInput.focus();
+      return;
+    }
+    if (password !== confirmation) {
+      setFieldError(confirmInput, errorNode, '两次输入的密码不一致');
+      confirmInput.focus();
+      return;
+    }
+
+    setBusy(button, true);
+    try {
+      await adminRequest('/api/admin/config', {
+        method: 'POST',
+        body: { adminPassword: password },
+      });
+      passwordInput.value = '';
+      confirmInput.value = '';
+      toast('管理员密码已更新，当前会话保持有效', 'success');
+      await loadConfig(true);
+    } catch (error) {
+      if (error.status !== 401) {
+        setFieldError(passwordInput, errorNode, error.message);
+        toast(error.message, 'error');
+      } else {
+        handleError(error, false);
+      }
+    } finally {
+      setBusy(button, false);
+    }
+  }
+
+  async function saveAccessToken() {
+    var input = $('#config-access-token');
+    var button = $('#btn-save-token');
+    if (!input) return;
+    var value = input.value.trim();
+
+    setBusy(button, true);
+    try {
+      await adminRequest('/api/admin/config', {
+        method: 'POST',
+        body: { accessToken: value },
+      });
+      input.value = '';
+      toast(value ? 'access_token 已更新，请同步更新 QQ 插件的 api_token' : '已清除 access_token', 'success');
+      await loadConfig(true);
+    } catch (error) {
+      if (error.status !== 401) toast(error.message, 'error');
+      else handleError(error, false);
+    } finally {
+      setBusy(button, false);
+    }
+  }
+
+  async function saveAllowedOrigins() {
+    var input = $('#config-allowed-origins');
+    var errorNode = $('#config-origins-error');
+    var button = $('#btn-save-origins');
+    if (!input) return;
+
+    var list = input.value
+      .split('\n')
+      .map(function (item) { return item.trim(); })
+      .filter(function (item) { return Boolean(item); });
+
+    clearFieldError(input, errorNode);
+    if (!list.length) {
+      setFieldError(input, errorNode, '至少保留一个允许来源，可填写 *');
+      input.focus();
+      return;
+    }
+
+    setBusy(button, true);
+    try {
+      await adminRequest('/api/admin/config', {
+        method: 'POST',
+        body: { allowedOrigins: list },
+      });
+      toast('允许来源已更新', 'success');
+      await loadConfig(true);
+    } catch (error) {
+      if (error.status !== 401) {
+        setFieldError(input, errorNode, error.message);
+        toast(error.message, 'error');
+      } else {
+        handleError(error, false);
+      }
+    } finally {
+      setBusy(button, false);
+    }
+  }
+
+  /* ---------------- API 地址设置弹层 ---------------- */
 
   function openSettings() {
     var modal = $('#admin-settings-modal');
@@ -1477,46 +2251,27 @@
     var errorNode = $('#admin-api-base-error');
     if (!input) return;
 
-    var value = normalizeBase(input.value);
-    if (!value) {
-      setFieldError(input, errorNode, '请填写 API 地址');
-      input.focus();
-      return;
-    }
-
-    var parsed = null;
-    try {
-      parsed = new URL(value);
-    } catch (e) {
-      parsed = null;
-    }
-    if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) {
-      setFieldError(input, errorNode, '地址需要以 http:// 或 https:// 开头');
+    var parsed = parseApiBase(input.value);
+    if (parsed.error) {
+      setFieldError(input, errorNode, parsed.error);
       input.focus();
       return;
     }
 
     clearFieldError(input, errorNode);
-    storageSet(STORAGE_API, value);
+    storageSet(STORAGE_API, parsed.base);
     closeSettings();
     updateApiChip();
 
     var loginBase = $('#admin-api-base');
-    if (loginBase) loginBase.value = value;
+    if (loginBase) loginBase.value = parsed.base;
 
     toast('已保存 API 地址', 'success');
 
     if (state.authed) {
-      if (state.activeTab === 'overview') {
-        loadStatus(true);
-        loadUsers(true);
-      } else if (state.activeTab === 'rooms') {
-        loadRooms(true);
-      } else if (state.activeTab === 'bindings') {
-        loadBindings(true);
-      } else if (state.activeTab === 'logs') {
-        loadLogs(true);
-      }
+      verifySession();
+    } else {
+      showLogin();
     }
   }
 
@@ -1532,10 +2287,9 @@
     } else if (state.activeTab === 'rooms') {
       loadRooms(true);
       if (state.selectedRoomId) loadRoomDetail(state.selectedRoomId, true);
-    } else if (state.activeTab === 'bindings') {
-      loadBindings(true);
-    } else if (state.activeTab === 'logs') {
-      loadLogs(true);
+    } else if (state.activeTab === 'players') {
+      loadUsers(true);
+      loadBans(true);
     }
   }
 
@@ -1547,21 +2301,91 @@
     } else if (state.activeTab === 'rooms') {
       loadRooms(false);
       if (state.selectedRoomId) loadRoomDetail(state.selectedRoomId, true);
+    } else if (state.activeTab === 'players') {
+      loadUsers(false);
+      loadBans(false);
     } else if (state.activeTab === 'bindings') {
       loadBindings(false);
     } else if (state.activeTab === 'logs') {
       loadLogs(false);
+    } else if (state.activeTab === 'settings') {
+      loadConfig(false);
     }
   }
 
   /* ---------------- 初始化 ---------------- */
 
+  function bindInputGuards() {
+    var playerSearch = $('#players-search');
+    if (playerSearch) {
+      playerSearch.addEventListener('input', function () {
+        state.playerSearch = playerSearch.value;
+        renderPlayers();
+      });
+    }
+
+    var banType = $('#ban-type');
+    if (banType) {
+      banType.addEventListener('change', function () {
+        var valueInput = $('#ban-value');
+        if (valueInput) {
+          valueInput.placeholder = banType.value === 'user' ? '例如 12345' : '例如 203.0.113.7';
+        }
+        clearFieldError(valueInput, $('#ban-error'));
+        clearFieldError($('#ban-minutes'), $('#ban-error'));
+      });
+    }
+
+    ['#ban-value', '#ban-minutes', '#ban-reason'].forEach(function (selector) {
+      var input = $(selector);
+      if (!input) return;
+      input.addEventListener('input', function () {
+        clearFieldError(input, $('#ban-error'));
+      });
+      if (selector !== '#ban-reason') {
+        input.addEventListener('keydown', function (event) {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            createBan();
+          }
+        });
+      }
+    });
+
+    var bindingsSearch = $('#bindings-search');
+    if (bindingsSearch) {
+      bindingsSearch.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          state.bindingSearch = bindingsSearch.value.trim();
+          state.bindingPage = 1;
+          loadBindings(false);
+        }
+      });
+    }
+
+    ['#config-admin-password', '#config-admin-password2'].forEach(function (selector) {
+      var input = $(selector);
+      if (!input) return;
+      input.addEventListener('input', function () {
+        clearFieldError($('#config-admin-password'), $('#config-password-error'));
+        clearFieldError($('#config-admin-password2'), $('#config-password-error'));
+      });
+    });
+
+    var originsInput = $('#config-allowed-origins');
+    if (originsInput) {
+      originsInput.addEventListener('input', function () {
+        clearFieldError(originsInput, $('#config-origins-error'));
+      });
+    }
+  }
+
   function bindEvents() {
     var loginForm = $('#admin-login-form');
     if (loginForm) {
       loginForm.addEventListener('submit', function (event) {
-        event.preventDefault();
-        attemptLogin(false);
+        attemptLogin(event);
       });
     }
 
@@ -1664,9 +2488,75 @@
       });
     }
 
+    var playersRefresh = $('#players-refresh');
+    if (playersRefresh) {
+      playersRefresh.addEventListener('click', function () {
+        loadUsers(false);
+        loadBans(false);
+      });
+    }
+
+    var banButton = $('#btn-ban');
+    if (banButton) banButton.addEventListener('click', createBan);
+
+    var bansRefresh = $('#bans-refresh');
+    if (bansRefresh) bansRefresh.addEventListener('click', function () { loadBans(false); });
+
     var bindingsRefresh = $('#bindings-refresh');
     if (bindingsRefresh) {
       bindingsRefresh.addEventListener('click', function () { loadBindings(false); });
+    }
+
+    var bindingsSearchButton = $('#btn-bindings-search');
+    if (bindingsSearchButton) {
+      bindingsSearchButton.addEventListener('click', function () {
+        var searchInput = $('#bindings-search');
+        state.bindingSearch = searchInput ? searchInput.value.trim() : '';
+        state.bindingPage = 1;
+        loadBindings(false);
+      });
+    }
+
+    var selectAll = $('#bindings-select-all');
+    if (selectAll) {
+      selectAll.addEventListener('change', function () {
+        var checked = Boolean(selectAll.checked);
+        state.selectedBindings = {};
+        state.bindingRows.forEach(function (row) {
+          row.input.checked = checked;
+          row.row.classList.toggle('is-selected', checked);
+          if (checked) state.selectedBindings[row.key] = true;
+        });
+        updateBindingSelectionUI();
+      });
+    }
+
+    var batchButton = $('#btn-batch-unbind');
+    if (batchButton) batchButton.addEventListener('click', batchUnbind);
+
+    var exportButton = $('#btn-export-bindings');
+    if (exportButton) exportButton.addEventListener('click', exportBindings);
+
+    var bindingsPrev = $('#bindings-prev');
+    if (bindingsPrev) {
+      bindingsPrev.addEventListener('click', function () {
+        if (state.bindingPage <= 1) return;
+        state.bindingPage -= 1;
+        loadBindings(false);
+      });
+    }
+
+    var bindingsNext = $('#bindings-next');
+    if (bindingsNext) {
+      bindingsNext.addEventListener('click', function () {
+        var totalPages = Math.max(
+          1,
+          Math.ceil(state.bindingTotal / (state.bindingPageSize || BINDINGS_PAGE_SIZE))
+        );
+        if (state.bindingPage >= totalPages) return;
+        state.bindingPage += 1;
+        loadBindings(false);
+      });
     }
 
     var linkButton = $('#btn-create-link');
@@ -1709,9 +2599,36 @@
       });
     }
 
+    var streamToggle = $('#btn-stream-toggle');
+    if (streamToggle) streamToggle.addEventListener('click', toggleLogStream);
+
+    var streamClear = $('#btn-stream-clear');
+    if (streamClear) streamClear.addEventListener('click', clearStreamView);
+
+    var settingsRefresh = $('#settings-refresh');
+    if (settingsRefresh) settingsRefresh.addEventListener('click', function () { loadConfig(false); });
+
+    var savePasswordButton = $('#btn-save-password');
+    if (savePasswordButton) savePasswordButton.addEventListener('click', saveAdminPassword);
+
+    var saveTokenButton = $('#btn-save-token');
+    if (saveTokenButton) saveTokenButton.addEventListener('click', saveAccessToken);
+
+    var saveOriginsButton = $('#btn-save-origins');
+    if (saveOriginsButton) saveOriginsButton.addEventListener('click', saveAllowedOrigins);
+
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState === 'visible' && state.authed) autoRefresh();
     });
+
+    window.addEventListener('beforeunload', function () {
+      stopLogStream(true);
+    });
+    window.addEventListener('pagehide', function () {
+      stopLogStream(true);
+    });
+
+    bindInputGuards();
   }
 
   function init() {
@@ -1723,18 +2640,17 @@
     bindEvents();
 
     var baseInput = $('#admin-api-base');
-    var tokenInput = $('#admin-token');
+    var details = $('#admin-api-details');
     if (baseInput) baseInput.value = getApiBase();
-    if (tokenInput) tokenInput.value = state.token || '';
+    if (details) details.open = !getApiBase();
     updateApiChip();
+    updateStreamButton();
 
     if (state.token && getApiBase()) {
-      attemptLogin(true);
-    } else if (!getApiBase()) {
-      showLogin();
-      setLoginError('请先填写 API 地址');
+      verifySession();
     } else {
       showLogin();
+      if (!getApiBase()) setLoginError('请先填写 API 地址');
     }
 
     setInterval(function () {

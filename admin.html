@@ -19,13 +19,15 @@
     <nav class="nav" id="admin-nav" hidden>
       <button class="nav-btn is-active" type="button" data-tab="overview">概览</button>
       <button class="nav-btn" type="button" data-tab="rooms">房间</button>
+      <button class="nav-btn" type="button" data-tab="players">玩家与封禁</button>
       <button class="nav-btn" type="button" data-tab="bindings">绑定</button>
+      <button class="nav-btn" type="button" data-tab="logs">实时日志</button>
       <button class="nav-btn" type="button" data-tab="announce">公告</button>
-      <button class="nav-btn" type="button" data-tab="logs">日志</button>
+      <button class="nav-btn" type="button" data-tab="settings">系统设置</button>
     </nav>
     <div class="topbar-actions">
       <span class="api-chip is-missing" id="admin-api-chip">API 未配置</span>
-      <button class="btn btn-ghost btn-sm" id="admin-settings" type="button">设置</button>
+      <button class="btn btn-ghost btn-sm" id="admin-settings" type="button">API 地址</button>
       <button class="btn btn-ghost btn-sm" id="admin-logout" type="button" hidden>退出登录</button>
     </div>
   </header>
@@ -37,19 +39,23 @@
         <div class="card-head">
           <div>
             <h2>管理员登录</h2>
-            <p class="muted">使用服务器 API 地址与访问令牌登录管理面板。</p>
+            <p class="muted">使用服务器 API 地址与管理员密码登录管理面板。</p>
           </div>
         </div>
         <div class="card-body">
-          <label class="field" for="admin-api-base">
-            <span>API 地址</span>
-            <input class="input" id="admin-api-base" type="url" placeholder="https://phira.example.com" autocomplete="url">
+          <details class="auth-advanced" id="admin-api-details">
+            <summary>API 地址设置</summary>
+            <label class="field" for="admin-api-base">
+              <span>API 地址</span>
+              <input class="input" id="admin-api-base" type="url" placeholder="https://login-phira.lisongyun.top" autocomplete="url">
+            </label>
+            <p class="hint">默认使用 config.js 中的地址，也可以在这里修改；地址保存在当前浏览器中，不会上传。</p>
+          </details>
+          <label class="field" for="admin-password">
+            <span>管理员密码</span>
+            <input class="input" id="admin-password" type="password" autocomplete="current-password" placeholder="服务端 api.admin_password">
           </label>
-          <label class="field" for="admin-token">
-            <span>访问令牌</span>
-            <input class="input" id="admin-token" type="password" autocomplete="off" placeholder="服务端未设置令牌时可留空">
-          </label>
-          <p class="hint">令牌对应后端 server_config.yml 中的 api.access_token。留空表示服务端未启用令牌校验。令牌仅保存在当前浏览器。</p>
+          <p class="hint">密码仅发送到你所配置的服务器，用于换取临时管理员令牌，本页面不会保存密码。令牌保存在浏览器 localStorage 的 phira_admin_token 中。</p>
           <p class="form-error" id="admin-login-error" hidden></p>
           <button class="btn btn-primary btn-block" id="admin-login-submit" type="submit">登录</button>
         </div>
@@ -109,8 +115,8 @@
         <div class="card">
           <div class="card-head">
             <div>
-              <h2>在线用户</h2>
-              <p class="muted">包含掉线等待重连的玩家。</p>
+              <h2>在线用户概览</h2>
+              <p class="muted">包含掉线等待重连的玩家；踢下线与封禁操作请前往“玩家与封禁”。</p>
             </div>
           </div>
           <div class="card-body">
@@ -203,6 +209,109 @@
         </div>
       </section>
 
+      <!-- 玩家与封禁 -->
+      <section class="tab-panel" id="tab-players" hidden>
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>在线用户</h2>
+              <p class="muted">按昵称或玩家 ID 过滤；踢下线会断开玩家连接，需要重新登录。</p>
+            </div>
+            <button class="btn btn-ghost btn-sm" id="players-refresh" type="button">刷新</button>
+          </div>
+          <div class="card-body">
+            <div class="inline-form">
+              <div class="field">
+                <label for="players-search">搜索玩家</label>
+                <input class="input" id="players-search" type="search" placeholder="昵称或玩家 ID" autocomplete="off">
+              </div>
+            </div>
+            <div class="table-wrap" id="players-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>玩家 ID</th>
+                    <th>昵称</th>
+                    <th>房间</th>
+                    <th>身份</th>
+                    <th>状态</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="players-body"></tbody>
+              </table>
+            </div>
+            <div class="empty" id="players-empty" hidden>当前没有在线用户。</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>新建封禁</h2>
+              <p class="muted">封禁保存在服务器内存中，重启后失效。</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="form-grid">
+              <div class="field">
+                <label for="ban-type">类型</label>
+                <select class="select" id="ban-type">
+                  <option value="ip">IP 地址</option>
+                  <option value="user">Phira ID</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="ban-value">封禁值</label>
+                <input class="input" id="ban-value" type="text" autocomplete="off" placeholder="IP 地址或 Phira ID">
+              </div>
+              <div class="field">
+                <label for="ban-minutes">时长（分钟）</label>
+                <input class="input" id="ban-minutes" type="number" min="0" step="1" value="60" inputmode="numeric">
+              </div>
+              <div class="field">
+                <label for="ban-reason">原因（可选）</label>
+                <input class="input" id="ban-reason" type="text" autocomplete="off" placeholder="例如 恶意刷屏">
+              </div>
+            </div>
+            <p class="field-error" id="ban-error" hidden></p>
+            <div class="control-row">
+              <button class="btn btn-primary" id="btn-ban" type="button">添加封禁</button>
+              <span class="hint">时长填 0 表示永久封禁。</span>
+            </div>
+            <p class="hint">IP 封禁同时拦截 HTTP 请求与游戏连接；Phira ID 封禁会在登录时拒绝。重置服务器后所有封禁失效。</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>封禁列表</h2>
+              <p class="muted">到期时间显示为“永久”表示无限期封禁。</p>
+            </div>
+            <button class="btn btn-ghost btn-sm" id="bans-refresh" type="button">刷新</button>
+          </div>
+          <div class="card-body">
+            <div class="table-wrap" id="bans-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>类型</th>
+                    <th>值</th>
+                    <th>原因</th>
+                    <th>创建时间</th>
+                    <th>到期时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="bans-body"></tbody>
+              </table>
+            </div>
+            <div class="empty" id="bans-empty" hidden>当前没有封禁记录。</div>
+          </div>
+        </div>
+      </section>
+
       <!-- 绑定 -->
       <section class="tab-panel" id="tab-bindings" hidden>
         <div class="card">
@@ -235,27 +344,86 @@
           <div class="card-head">
             <div>
               <h2>QQ 绑定列表</h2>
-              <p class="muted">解绑后该 QQ 需要重新登录绑定。</p>
+              <p class="muted">支持按 QQ 号、Phira ID 或昵称搜索；解绑后该 QQ 需要重新登录绑定。</p>
             </div>
             <button class="btn btn-ghost btn-sm" id="bindings-refresh" type="button">刷新</button>
           </div>
           <div class="card-body">
+            <div class="inline-form">
+              <div class="field">
+                <label for="bindings-search">搜索</label>
+                <input class="input" id="bindings-search" type="search" placeholder="QQ 号 / Phira ID / 昵称" autocomplete="off">
+              </div>
+              <button class="btn" id="btn-bindings-search" type="button">搜索</button>
+            </div>
+            <div class="control-row">
+              <button class="btn btn-danger" id="btn-batch-unbind" type="button" disabled>批量解绑</button>
+              <button class="btn" id="btn-export-bindings" type="button">导出 JSON</button>
+              <span class="hint" id="bindings-selected-count">未选择</span>
+            </div>
             <div class="table-wrap" id="bindings-wrap">
               <table class="table">
                 <thead>
                   <tr>
+                    <th class="col-check"><input class="checkbox" id="bindings-select-all" type="checkbox" aria-label="全选当前页"></th>
                     <th>平台</th>
                     <th>QQ 号</th>
                     <th>Phira ID</th>
                     <th>昵称</th>
                     <th>绑定时间</th>
-                    <th>操作</th>
                   </tr>
                 </thead>
                 <tbody id="bindings-body"></tbody>
               </table>
             </div>
             <div class="empty" id="bindings-empty" hidden>暂无绑定记录。</div>
+            <div class="pagination">
+              <button class="btn btn-ghost btn-sm" id="bindings-prev" type="button">上一页</button>
+              <span class="pagination-info" id="bindings-page-info">第 1 / 1 页</span>
+              <button class="btn btn-ghost btn-sm" id="bindings-next" type="button">下一页</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 实时日志 -->
+      <section class="tab-panel" id="tab-logs" hidden>
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>实时日志</h2>
+              <p class="muted">通过 SSE 接收服务端日志，最多保留 1000 行，自动滚动到底部。</p>
+            </div>
+            <div class="card-actions">
+              <span class="tag tag-muted" id="stream-status">未连接</span>
+              <button class="btn btn-ghost btn-sm" id="btn-stream-toggle" type="button">开始实时</button>
+              <button class="btn btn-ghost btn-sm" id="btn-stream-clear" type="button">清空</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <pre class="log-view" id="log-stream">尚未开始实时日志。</pre>
+            <p class="hint">EventSource 无法携带 Authorization 请求头，因此管理员令牌通过查询参数 token 传给 /api/logs/stream。断开后 3 秒自动重连，手动停止则不再重连。</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>最近日志快照</h2>
+              <p class="muted" id="log-file">尚未加载</p>
+            </div>
+            <div class="card-actions">
+              <select class="select select-sm" id="log-lines" aria-label="日志行数">
+                <option value="100">100 行</option>
+                <option value="200" selected>200 行</option>
+                <option value="500">500 行</option>
+                <option value="1000">1000 行</option>
+              </select>
+              <button class="btn btn-ghost btn-sm" id="logs-refresh" type="button">拉取</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <pre class="log-view" id="log-content">尚未加载。</pre>
           </div>
         </div>
       </section>
@@ -283,26 +451,87 @@
         </div>
       </section>
 
-      <!-- 日志 -->
-      <section class="tab-panel" id="tab-logs" hidden>
+      <!-- 系统设置 -->
+      <section class="tab-panel" id="tab-settings" hidden>
         <div class="card">
           <div class="card-head">
             <div>
-              <h2>服务器日志</h2>
-              <p class="muted" id="log-file">尚未加载</p>
+              <h2>服务端配置</h2>
+              <p class="muted">只读展示当前运行配置，敏感项仅显示是否已配置。</p>
             </div>
-            <div class="card-actions">
-              <select class="select select-sm" id="log-lines" aria-label="日志行数">
-                <option value="100">100 行</option>
-                <option value="200" selected>200 行</option>
-                <option value="500">500 行</option>
-                <option value="1000">1000 行</option>
-              </select>
-              <button class="btn btn-ghost btn-sm" id="logs-refresh" type="button">刷新</button>
+            <button class="btn btn-ghost btn-sm" id="settings-refresh" type="button">刷新</button>
+          </div>
+          <div class="card-body">
+            <div class="meta-grid" id="config-grid"></div>
+            <p class="hint">以下修改会写入服务端 runtime-config.json，重启后仍然生效。</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>修改管理员密码</h2>
+              <p class="muted">修改成功后当前会话保持有效，其他管理员会话会被注销。</p>
             </div>
           </div>
           <div class="card-body">
-            <pre class="log-view" id="log-content">尚未加载。</pre>
+            <div class="form-grid">
+              <div class="field">
+                <label for="config-admin-password">新密码</label>
+                <input class="input" id="config-admin-password" type="password" autocomplete="new-password" placeholder="至少 6 位">
+              </div>
+              <div class="field">
+                <label for="config-admin-password2">确认新密码</label>
+                <input class="input" id="config-admin-password2" type="password" autocomplete="new-password" placeholder="再次输入">
+              </div>
+            </div>
+            <p class="field-error" id="config-password-error" hidden></p>
+            <div class="control-row">
+              <button class="btn btn-primary" id="btn-save-password" type="button">保存密码</button>
+              <span class="hint">密码长度 6~64 位，修改后请使用新密码登录。</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>修改 access_token</h2>
+              <p class="muted">用于 QQ 插件和旧的令牌认证方式。</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="field">
+              <label for="config-access-token">access_token</label>
+              <input class="input" id="config-access-token" type="password" autocomplete="off" placeholder="留空表示不设置">
+            </div>
+            <div class="notice notice-danger">
+              <p>配置 access_token 后，QQ 插件必须在其配置里填写同样的 api_token，否则管理类指令会返回 401。</p>
+            </div>
+            <div class="control-row">
+              <button class="btn btn-primary" id="btn-save-token" type="button">保存 access_token</button>
+              <span class="hint">留空并保存表示清除 access_token。</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>允许来源 allowed_origins</h2>
+              <p class="muted">每行一个来源，例如 https://phira.example.com 或 *。</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="field">
+              <label for="config-allowed-origins">允许来源</label>
+              <textarea class="textarea" id="config-allowed-origins" placeholder="https://phira.example.com" spellcheck="false"></textarea>
+            </div>
+            <p class="field-error" id="config-origins-error" hidden></p>
+            <div class="control-row">
+              <button class="btn btn-primary" id="btn-save-origins" type="button">保存允许来源</button>
+              <span class="hint">至少保留一个来源，可使用 * 允许所有来源。</span>
+            </div>
           </div>
         </div>
       </section>
@@ -318,7 +547,7 @@
       <div class="modal-body">
         <label class="field" for="admin-api-base-input">
           <span>服务器 API 地址</span>
-          <input class="input" id="admin-api-base-input" type="url" placeholder="https://phira.example.com" autocomplete="url">
+          <input class="input" id="admin-api-base-input" type="url" placeholder="https://login-phira.lisongyun.top" autocomplete="url">
         </label>
         <p class="field-error" id="admin-api-base-error" hidden></p>
         <p class="hint">填写后端 HTTP API 的根地址，不要带末尾斜杠。地址保存在当前浏览器中。</p>
